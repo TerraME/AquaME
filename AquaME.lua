@@ -119,19 +119,22 @@ AquaME = Model {
 
     end)
 
-    --** print(sessionInfo().time, ": Define timed events.")
     model.timer = Timer {
 
-      Event {priority = 1, action = function(event)
+        -- Calculates outflow, precipitation, infiltration and alpha for rivers.
+        Event {priority = 1, action = function(event)
 
-        --** print(sessionInfo().time, ": Calculates precipitation, infiltration and alpha for rivers.")
+        -- Initialize event outflow with zero.
+        local outflow = 0
 
+        -- Update water and outflow of each cell for the event.
         forEachCell(model.cs, function(cell)
+
+          -- If cell is at an open border, let water ouflow from cell.
+          if cell.open then outflow = outflow + cell.water; cell.water = 0 end
 
           -- Adds precipitation to cell water.
           cell.water = cell.water + model:loadPrecipitation(cell, event:getTime())
-
-          --** print(sessionInfo().time, ": Calculates cell infiltration.")
 
           -- Replace nil by default values:
           local infiltration = cell.infiltration or 0
@@ -157,15 +160,16 @@ AquaME = Model {
             --]]
             cell.alpha = alpha
           end
-
         end)
-      end},
 
-      Event {priority = 2, action = function(_)
+        -- Calculates and save outflow in m3/sec for the time step:
+        model.outflow[event:getTime()-1] = outflow
+          * model.xCellSize  -- meters per cell, x dimension
+          * model.yCellSize  -- meters per cell, y dimension
+          / model.stepHours  -- hours per time step
+          / 3600             -- seconds per hour
 
-        --** print(sessionInfo().time, ": Calculates runoff.")
-
-        -- For each partition in their order (Rinaldi et al. 2007, figure 5):
+        -- Calculates runoff for each partition (Rinaldi et al. 2007, figure 5):
         for partition = 1, #model.grid do
 
           -- For each grid of the partition, obtains the center cell and its grid:
@@ -180,9 +184,7 @@ AquaME = Model {
 
             local W = grid[N].water                 -- Will store the current water volume contained in the grid divided by the unit-cell area  (Rinaldi et al. 2007, equation 3).
             local alpha = cell.alpha or model.alpha -- Resistance to runoff. Using nil as default for lower memory consumption.
-
-            -- Store the next water level. Adjusted a few lines below for lower cells that receive water from higher cells.
-            grid[N].water = alpha * grid[N].water
+            grid[N].water = alpha * grid[N].water   -- Updates the next water level. Adjusted below for cells that receive water from higher cells.
 
             for i = 1, N-1 do
               h[i] = grid[i].height
@@ -191,14 +193,17 @@ AquaME = Model {
               grid[i].water = alpha * grid[i].water
             end
 
-            --[[** If there is no water in the grid, there is nothing else to calculate,
-                but testing this would only help performance if there was a large number of cells with no water each time step.
+            -- If there is no water in the grid, there is nothing else to calculate,
+            -- Testing this helps performance when there is a large number of grids with no water every time step.
             if W == 0 then return end
-            --]]
 
             -- Obtain k, the number of cells that remains wet after the water drains down (Rinaldi et al. 2007, equation 4):
-            -- Obtain also "s", the sum of h[i] until h[k-1], a shortcut for obtaining H (see below).
-            local k = N; while W + s < (k-1)*h[k] and k >= 2 do k = k - 1; s = s - h[k] end
+            -- and adjusts "s", the sum of h[i] until h[k-1].
+            local k = N
+            while W + s < (k-1)*h[k] and k >= 2 do 
+              k = k - 1
+              s = s - h[k] 
+            end
 
             -- Calculate H, the equilibrium surface height the water would reach if enough time was provided (Rinaldi et al. 2007, equation 2):
             local H = (W + s + h[k])/k
@@ -211,34 +216,14 @@ AquaME = Model {
         end
       end},
 
-      Event {priority = 3, action = function(event)
-
-        --** print(sessionInfo().time, ": Calculates outflow.")
-
-        local outflow = 0
-
-        -- If cell is at an open border, let water ouflow from cell .
-        forEachCell(model.cs, function(cell)
-          if cell.open then outflow = outflow + cell.water; cell.water = 0 end
-        end)
-
-        -- Calculates and save outflow in m3/sec for the time step:
-        model.outflow[event:getTime()] = outflow
-          * model.xCellSize  -- meters per cell, x dimension
-          * model.yCellSize  -- meters per cell, y dimension
-          / model.stepHours  -- hours per time step
-          / 3600             -- seconds per hour
-
-      end},
-
-      -- [[**
+      --[[**
       Event {priority = 5, period = 5000, action = function(event)
         print(sessionInfo().time, ": End of time step ", event:getTime(), ".")
       end},
       --]]
 
+      -- Shows chart:
       Event {priority = 6, period = model.finalTime, action = function(_)
-        --** print(sessionInfo().time, ": Shows chart.")
         Chart{target = DataFrame{outflow = model.outflow}, select = "outflow", color = "blue" }
       end},
     }
@@ -268,8 +253,8 @@ simplePlain = AquaME {
 
     model.channelDepth = 2.5    -- Additional depth at the highest border of the channel, in meters.
     model.rainBegin = 0         -- Instant when when rain begins after the beginning of the simulatio, in hours.
-    model.rainDuration = 5     -- Rain duration, in hours.
-    model.rainRate = 0.005      -- Rate of rain, in mm per hour.
+    model.rainDuration = 10     -- Rain duration, in hours.
+    model.rainRate = 0.015      -- Rate of rain, in m per hour.
     model.rainAll = false       -- True if it rains also on the channel.
 
     -- Assumes an integer number of grids for channel greater than zero.
@@ -322,11 +307,10 @@ simplePlain = AquaME {
     end
 
   end,
+
 }
 
---** print(sessionInfo().time, ": SimplePlain instance created.")
-print(sessionInfo().time, ": Runs scenario.")
-
+-- Runs scenario:
 simplePlain:run()
 
 print(sessionInfo().time, ": Session ends.")
